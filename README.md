@@ -98,6 +98,12 @@ state under crash-stop failures.
 
 ---
 
+## Documentation
+
+- Safety and correctness invariants: `docs/invariants.md`
+
+---
+
 ## Status
 
 Work in progress (v1).
