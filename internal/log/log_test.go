@@ -146,3 +146,79 @@ func TestCommitIndexBeyondLogFails(t *testing.T) {
 		t.Fatalf("expected failure on invalid commit index")
 	}
 }
+
+func TestReadEntry(t *testing.T) {
+	l, _ := newTestLog(t)
+
+	if err := l.Append(1, []byte("A")); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(2, []byte("B")); err != nil {
+		t.Fatal(err)
+	}
+
+	e, err := l.Read(2)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	if e.Index != 2 || string(e.Payload) != "B" {
+		t.Fatalf("unexpected entry: %+v", e)
+	}
+}
+
+func TestReadNonExistentEntry(t *testing.T) {
+	l, _ := newTestLog(t)
+
+	_, err := l.Read(1)
+	if err == nil {
+		t.Fatalf("expected error for non-existent entry")
+	}
+}
+
+func TestTruncateSpeculativeEntries(t *testing.T) {
+	l, _ := newTestLog(t)
+
+	l.Append(1, []byte("A"))
+	l.Append(2, []byte("B"))
+	l.Append(3, []byte("C"))
+
+	if err := l.TruncateFrom(2); err != nil {
+		t.Fatal(err)
+	}
+
+	if l.LastIndex() != 1 {
+		t.Fatalf("expected lastIndex=1, got %d", l.LastIndex())
+	}
+
+	if _, err := l.Read(2); err == nil {
+		t.Fatalf("expected entry 2 to be truncated")
+	}
+}
+
+func TestTruncateCommittedFails(t *testing.T) {
+	l, _ := newTestLog(t)
+
+	l.Append(1, []byte("A"))
+	l.Commit(1)
+
+	if err := l.TruncateFrom(1); err == nil {
+		t.Fatalf("expected failure truncating committed entry")
+	}
+}
+
+func TestTruncatePersistsAcrossRestart(t *testing.T) {
+	l, dir := newTestLog(t)
+
+	l.Append(1, []byte("A"))
+	l.Append(2, []byte("B"))
+	l.TruncateFrom(2)
+
+	l.Close()
+
+	l2 := reopenLog(t, dir)
+
+	if l2.LastIndex() != 1 {
+		t.Fatalf("expected lastIndex=1 after restart")
+	}
+}
