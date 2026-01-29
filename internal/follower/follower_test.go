@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sanin7k/ledger/internal/log"
+	"github.com/sanin7k/ledger/internal/protocol"
 )
 
 func newFollower(t *testing.T) (*Follower, *log.Log, string) {
@@ -29,7 +30,7 @@ func reopenFollower(t *testing.T, dir string) (*Follower, *log.Log) {
 func TestFollowerAppendSuccess(t *testing.T) {
 	f, l, _ := newFollower(t)
 
-	resp := f.HandleAppend(AppendRequest{
+	resp := f.HandleAppend(protocol.AppendRequest{
 		PrevIndex:         0,
 		PrevChecksum:      0,
 		Index:             1,
@@ -48,7 +49,7 @@ func TestFollowerAppendSuccess(t *testing.T) {
 func TestFollowerRejectsMissingPrefix(t *testing.T) {
 	f, _, _ := newFollower(t)
 
-	resp := f.HandleAppend(AppendRequest{
+	resp := f.HandleAppend(protocol.AppendRequest{
 		PrevIndex:         1,
 		PrevChecksum:      123,
 		Index:             2,
@@ -65,14 +66,14 @@ func TestFollowerTruncatesOnPrefixMismatch(t *testing.T) {
 	f, l, _ := newFollower(t)
 
 	// Append entry 1
-	f.HandleAppend(AppendRequest{
+	f.HandleAppend(protocol.AppendRequest{
 		PrevIndex: 0,
 		Index:     1,
 		Payload:   []byte("A"),
 	})
 
 	// Append entry 2
-	f.HandleAppend(AppendRequest{
+	f.HandleAppend(protocol.AppendRequest{
 		PrevIndex:    1,
 		PrevChecksum: crc32.ChecksumIEEE([]byte("A")), // assume correct
 		Index:        2,
@@ -80,7 +81,7 @@ func TestFollowerTruncatesOnPrefixMismatch(t *testing.T) {
 	})
 
 	// Leader sends conflicting append at index 2
-	resp := f.HandleAppend(AppendRequest{
+	resp := f.HandleAppend(protocol.AppendRequest{
 		PrevIndex:    1,
 		PrevChecksum: 9999, // wrong checksum
 		Index:        2,
@@ -101,7 +102,7 @@ func TestFollowerTruncatesOnPrefixMismatch(t *testing.T) {
 func TestFollowerRejectsOverwriteCommitted(t *testing.T) {
 	f, l, _ := newFollower(t)
 
-	f.HandleAppend(AppendRequest{
+	f.HandleAppend(protocol.AppendRequest{
 		PrevIndex: 0,
 		Index:     1,
 		Payload:   []byte("A"),
@@ -111,7 +112,7 @@ func TestFollowerRejectsOverwriteCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp := f.HandleAppend(AppendRequest{
+	resp := f.HandleAppend(protocol.AppendRequest{
 		PrevIndex: 0,
 		Index:     1,
 		Payload:   []byte("B"),
@@ -125,7 +126,7 @@ func TestFollowerRejectsOverwriteCommitted(t *testing.T) {
 func TestFollowerCommitPropagation(t *testing.T) {
 	f, l, _ := newFollower(t)
 
-	f.HandleAppend(AppendRequest{
+	f.HandleAppend(protocol.AppendRequest{
 		PrevIndex:         0,
 		Index:             1,
 		Payload:           []byte("A"),
@@ -140,7 +141,7 @@ func TestFollowerCommitPropagation(t *testing.T) {
 func TestFollowerCrashRecovery(t *testing.T) {
 	f, l, dir := newFollower(t)
 
-	f.HandleAppend(AppendRequest{
+	f.HandleAppend(protocol.AppendRequest{
 		PrevIndex: 0,
 		Index:     1,
 		Payload:   []byte("A"),
@@ -163,7 +164,7 @@ func TestFollowerCrashRecovery(t *testing.T) {
 	}
 
 	// Try illegal overwrite
-	resp := f2.HandleAppend(AppendRequest{
+	resp := f2.HandleAppend(protocol.AppendRequest{
 		PrevIndex: 0,
 		Index:     1,
 		Payload:   []byte("B"),

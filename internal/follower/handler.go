@@ -1,22 +1,9 @@
 package follower
 
-type AppendRequest struct {
-	LeaderID          uint32
-	PrevIndex         uint64
-	PrevChecksum      uint32
-	Index             uint64
-	Payload           []byte
-	LeaderCommitIndex uint64
-}
+import "github.com/sanin7k/ledger/internal/protocol"
 
-type AppendResponse struct {
-	FollowerID uint32
-	Success    bool
-	LastIndex  uint64
-}
-
-func (f *Follower) HandleAppend(req AppendRequest) AppendResponse {
-	resp := AppendResponse{
+func (f *Follower) HandleAppend(req protocol.AppendRequest) protocol.AppendResponse {
+	resp := protocol.AppendResponse{
 		FollowerID: f.id,
 		Success:    false,
 		LastIndex:  f.log.LastIndex(),
