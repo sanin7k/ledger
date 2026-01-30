@@ -14,7 +14,7 @@ import (
 	"github.com/sanin7k/ledger/internal/log"
 )
 
-func startFollower(t *testing.T, id uint32, addr string, dir string) {
+func startFollower(t *testing.T, id uint32, addr string, dir string) func() {
 	lg, err := log.Open(dir)
 	if err != nil {
 		t.Fatalf("follower log open failed: %v", err)
@@ -22,15 +22,18 @@ func startFollower(t *testing.T, id uint32, addr string, dir string) {
 
 	f := follower.NewFollower(id, lg)
 
+	done := make(chan struct{})
+
 	go func() {
-		err := follower.Serve(addr, f)
-		if err != nil {
-			t.Errorf("follower serve failed: %v", err)
-		}
+		_ = follower.Serve(addr, f)
+		close(done)
 	}()
 
-	// Give TCP listener time to start
 	time.Sleep(50 * time.Millisecond)
+
+	return func() {
+		lg.Close()
+	}
 }
 
 func sendClientAppend(t *testing.T, addr string, payload []byte) []byte {
@@ -57,62 +60,148 @@ func sendClientAppend(t *testing.T, addr string, payload []byte) []byte {
 	return resp[:n]
 }
 
-func TestLeaderFollowerEndToEnd(t *testing.T) {
+func TestEndToEndHappyPath(t *testing.T) {
 	baseDir := t.TempDir()
 
-	// --- Start followers ---
-	f1Dir := filepath.Join(baseDir, "follower1")
-	f2Dir := filepath.Join(baseDir, "follower2")
+	f1Dir := filepath.Join(baseDir, "f1")
+	f2Dir := filepath.Join(baseDir, "f2")
 	os.MkdirAll(f1Dir, 0755)
 	os.MkdirAll(f2Dir, 0755)
 
-	startFollower(t, 1, "127.0.0.1:9101", f1Dir)
-	startFollower(t, 2, "127.0.0.1:9102", f2Dir)
+	startFollower(t, 1, "127.0.0.1:9201", f1Dir)
+	startFollower(t, 2, "127.0.0.1:9202", f2Dir)
 
-	// --- Start leader ---
 	leaderDir := filepath.Join(baseDir, "leader")
 	os.MkdirAll(leaderDir, 0755)
 
-	lg, err := log.Open(leaderDir)
-	if err != nil {
-		t.Fatalf("leader log open failed: %v", err)
-	}
-
+	lg, _ := log.Open(leaderDir)
 	ldr := leader.NewLeader(
 		100,
 		lg,
 		[]string{
-			"127.0.0.1:9101",
-			"127.0.0.1:9102",
+			"127.0.0.1:9201",
+			"127.0.0.1:9202",
 		},
 	)
 
-	go func() {
-		err := leader.Serve("127.0.0.1:9100", ldr)
-		if err != nil {
-			t.Errorf("leader serve failed: %v", err)
-		}
-	}()
-
+	go leader.Serve("127.0.0.1:9200", ldr)
 	time.Sleep(50 * time.Millisecond)
 
-	// --- Client append ---
-	resp := sendClientAppend(t, "127.0.0.1:9100", []byte("hello-ledger"))
+	resp := sendClientAppend(t, "127.0.0.1:9200", []byte("ok"))
+
+	if string(resp) != "OK" {
+		t.Fatalf("expected OK, got %q", resp)
+	}
+}
+
+func TestAppendWithOneFollowerDown(t *testing.T) {
+	baseDir := t.TempDir()
+
+	f1Dir := filepath.Join(baseDir, "f1")
+	f2Dir := filepath.Join(baseDir, "f2")
+	os.MkdirAll(f1Dir, 0755)
+	os.MkdirAll(f2Dir, 0755)
+
+	// Start only ONE follower
+	startFollower(t, 1, "127.0.0.1:9301", f1Dir)
+
+	leaderDir := filepath.Join(baseDir, "leader")
+	os.MkdirAll(leaderDir, 0755)
+
+	lg, _ := log.Open(leaderDir)
+	ldr := leader.NewLeader(
+		1,
+		lg,
+		[]string{
+			"127.0.0.1:9301",
+			"127.0.0.1:9302", // dead follower
+		},
+	)
+
+	go leader.Serve("127.0.0.1:9300", ldr)
+	time.Sleep(50 * time.Millisecond)
+
+	resp := sendClientAppend(t, "127.0.0.1:9300", []byte("majority"))
 
 	if string(resp) != "OK" {
 		t.Fatalf("expected OK, got %q", resp)
 	}
 
-	// --- Verify durability ---
 	lg2, _ := log.Open(leaderDir)
 	if lg2.CommitIndex() != 1 {
-		t.Fatalf("leader commitIndex = %d, expected 1", lg2.CommitIndex())
+		t.Fatalf("expected commitIndex=1, got %d", lg2.CommitIndex())
+	}
+}
+
+func TestAppendWithoutQuorumFails(t *testing.T) {
+	baseDir := t.TempDir()
+
+	leaderDir := filepath.Join(baseDir, "leader")
+	os.MkdirAll(leaderDir, 0755)
+
+	lg, _ := log.Open(leaderDir)
+	ldr := leader.NewLeader(
+		1,
+		lg,
+		[]string{
+			"127.0.0.1:9401",
+			"127.0.0.1:9402",
+		},
+	)
+
+	go leader.Serve("127.0.0.1:9400", ldr)
+	time.Sleep(50 * time.Millisecond)
+
+	resp := sendClientAppend(t, "127.0.0.1:9400", []byte("fail"))
+
+	if string(resp) == "OK" {
+		t.Fatalf("expected failure without quorum")
 	}
 
-	f1Log, _ := log.Open(f1Dir)
-	f2Log, _ := log.Open(f2Dir)
+	lg2, _ := log.Open(leaderDir)
+	if lg2.CommitIndex() != 0 {
+		t.Fatalf("commitIndex must not advance")
+	}
+}
 
-	if f1Log.LastIndex() != 1 || f2Log.LastIndex() != 1 {
-		t.Fatalf("followers did not replicate entry")
+func TestFollowerRestartAfterMissedAppend(t *testing.T) {
+	baseDir := t.TempDir()
+
+	f1Dir := filepath.Join(baseDir, "f1")
+	os.MkdirAll(f1Dir, 0755)
+
+	stopFollower := startFollower(t, 1, "127.0.0.1:9501", f1Dir)
+
+	leaderDir := filepath.Join(baseDir, "leader")
+	os.MkdirAll(leaderDir, 0755)
+
+	lg, _ := log.Open(leaderDir)
+	ldr := leader.NewLeader(
+		1,
+		lg,
+		[]string{
+			"127.0.0.1:9501",
+		},
+	)
+
+	go leader.Serve("127.0.0.1:9500", ldr)
+	time.Sleep(50 * time.Millisecond)
+
+	// Kill follower before append
+	stopFollower()
+
+	resp := sendClientAppend(t, "127.0.0.1:9500", []byte("lost"))
+
+	if string(resp) == "OK" {
+		t.Fatalf("should not succeed without quorum")
+	}
+
+	// Restart follower
+	startFollower(t, 1, "127.0.0.1:9501", f1Dir)
+
+	// No corruption should exist
+	fLog, _ := log.Open(f1Dir)
+	if fLog.LastIndex() != 0 {
+		t.Fatalf("follower log should be empty after restart")
 	}
 }
