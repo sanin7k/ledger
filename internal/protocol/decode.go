@@ -40,3 +40,30 @@ func DecodeAppendRequest(b []byte) (AppendRequest, error) {
 
 	return req, nil
 }
+
+func DecodeAppendResponse(b []byte) (AppendResponse, error) {
+	var resp AppendResponse
+
+	buf := bytes.NewReader(b)
+
+	if err := binary.Read(buf, binary.BigEndian, &resp.FollowerID); err != nil {
+		return resp, err
+	}
+
+	successByte, err := buf.ReadByte()
+	if err != nil {
+		return resp, err
+	}
+	resp.Success = successByte == 1
+
+	if err := binary.Read(buf, binary.BigEndian, &resp.LastIndex); err != nil {
+		return resp, err
+	}
+
+	// Defensive: ensure no trailing garbage
+	if buf.Len() != 0 {
+		return resp, errors.New("extra bytes in AppendResponse")
+	}
+
+	return resp, nil
+}
