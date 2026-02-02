@@ -3,13 +3,14 @@ package leader
 import (
 	"net"
 	"sync"
+	"time"
 
 	"github.com/sanin7k/ledger/internal/log"
 	"github.com/sanin7k/ledger/internal/protocol"
 	"github.com/sanin7k/ledger/internal/transport"
 )
 
-type appendFunc func(addr string, req protocol.AppendRequest) (bool, uint64)
+type appendFunc func(addr string, req protocol.AppendRequest) (bool, uint64, bool)
 
 type Leader struct {
 	id        uint32
@@ -29,16 +30,18 @@ func NewLeader(id uint32, log *log.Log, followers []string) *Leader {
 	}
 }
 
-func sendAppend(addr string, req protocol.AppendRequest) (bool, uint64) {
-	conn, err := net.Dial("tcp", addr)
+func sendAppend(addr string, req protocol.AppendRequest) (bool, uint64, bool) {
+	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 	if err != nil {
-		return false, 0
+		return false, 0, false
 	}
 	defer conn.Close()
 
+	_ = conn.SetDeadline(time.Now().Add(200 * time.Millisecond))
+
 	payload, err := protocol.EncodeAppendRequest(req)
 	if err != nil {
-		return false, 0
+		return false, 0, false
 	}
 
 	err = transport.WriteFrame(conn, transport.Frame{
@@ -46,22 +49,22 @@ func sendAppend(addr string, req protocol.AppendRequest) (bool, uint64) {
 		Payload: payload,
 	})
 	if err != nil {
-		return false, 0
+		return false, 0, false
 	}
 
 	frame, err := transport.ReadFrame(conn)
 	if err != nil {
-		return false, 0
+		return false, 0, false
 	}
 
 	if frame.Type != protocol.MsgAppendResponse {
-		return false, 0
+		return false, 0, false
 	}
 
 	resp, err := protocol.DecodeAppendResponse(frame.Payload)
 	if err != nil {
-		return false, 0
+		return false, 0, false
 	}
 
-	return resp.Success, resp.LastIndex
+	return resp.Success, resp.LastIndex, true
 }

@@ -25,7 +25,16 @@ func (f *Follower) HandleAppend(req protocol.AppendRequest) protocol.AppendRespo
 				print(err.Error())
 				return resp
 			}
+			resp.LastIndex = f.log.LastIndex()
+			return resp
 		}
+	}
+
+	// Probe-only response
+	if req.Payload == nil {
+		resp.Success = true
+		resp.LastIndex = f.log.LastIndex()
+		return resp
 	}
 
 	if req.Index <= f.log.CommitIndex() {
