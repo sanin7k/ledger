@@ -58,6 +58,14 @@ func (l *Leader) append(payload []byte) error {
 
 	newIndex := l.log.LastIndex() + 1
 
+	prevChecksum := uint32(0)
+	if newIndex > 1 {
+		prevEntry, err := l.log.Read(newIndex - 1)
+		if err != nil {
+			return err
+		}
+		prevChecksum = prevEntry.Checksum
+	}
 	// 1. Append locally (durable, uncommitted)
 	if err := l.log.Append(newIndex, payload); err != nil {
 		return err
@@ -71,7 +79,7 @@ func (l *Leader) append(payload []byte) error {
 		req := protocol.AppendRequest{
 			LeaderID:          l.id,
 			PrevIndex:         newIndex - 1,
-			PrevChecksum:      0, // v1: leader is source of truth
+			PrevChecksum:      prevChecksum,
 			Index:             newIndex,
 			Payload:           payload,
 			LeaderCommitIndex: l.log.CommitIndex(),

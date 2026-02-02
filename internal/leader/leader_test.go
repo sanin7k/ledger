@@ -33,16 +33,18 @@ func TestLeaderAppendSuccess(t *testing.T) {
 		return true, req.Index
 	}
 
-	err := ldr.append([]byte("hello"))
-	if err != nil {
-		t.Fatalf("append failed: %v", err)
+	for i := 0; i < 3; i++ {
+		err := ldr.append([]byte("hello"))
+		if err != nil {
+			t.Fatalf("append failed: %v", err)
+		}
 	}
 
-	if lg.LastIndex() != 1 {
-		t.Fatalf("expected lastIndex=1, got %d", lg.LastIndex())
+	if lg.LastIndex() != 3 {
+		t.Fatalf("expected lastIndex=3, got %d", lg.LastIndex())
 	}
-	if lg.CommitIndex() != 1 {
-		t.Fatalf("expected commitIndex=1, got %d", lg.CommitIndex())
+	if lg.CommitIndex() != 3 {
+		t.Fatalf("expected commitIndex=3, got %d", lg.CommitIndex())
 	}
 }
 

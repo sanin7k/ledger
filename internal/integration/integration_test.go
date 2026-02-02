@@ -63,6 +63,7 @@ func sendClientAppend(t *testing.T, addr string, payload []byte) []byte {
 func TestEndToEndHappyPath(t *testing.T) {
 	baseDir := t.TempDir()
 
+	// --- follower dirs ---
 	f1Dir := filepath.Join(baseDir, "f1")
 	f2Dir := filepath.Join(baseDir, "f2")
 	os.MkdirAll(f1Dir, 0755)
@@ -71,10 +72,15 @@ func TestEndToEndHappyPath(t *testing.T) {
 	startFollower(t, 1, "127.0.0.1:9201", f1Dir)
 	startFollower(t, 2, "127.0.0.1:9202", f2Dir)
 
+	// --- leader ---
 	leaderDir := filepath.Join(baseDir, "leader")
 	os.MkdirAll(leaderDir, 0755)
 
-	lg, _ := log.Open(leaderDir)
+	lg, err := log.Open(leaderDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	ldr := leader.NewLeader(
 		100,
 		lg,
@@ -87,10 +93,54 @@ func TestEndToEndHappyPath(t *testing.T) {
 	go leader.Serve("127.0.0.1:9200", ldr)
 	time.Sleep(50 * time.Millisecond)
 
-	resp := sendClientAppend(t, "127.0.0.1:9200", []byte("ok"))
+	// --- client append ---
+	payload := []byte("ok")
+	for i := 1; i <= 3; i++ {
+		resp := sendClientAppend(t, "127.0.0.1:9200", payload)
 
-	if string(resp) != "OK" {
-		t.Fatalf("expected OK, got %q", resp)
+		if string(resp) != "OK" {
+			t.Fatalf("expected OK, got %q for entry %d", resp, i)
+		}
+	}
+
+	// --- verify leader state ---
+	leaderLog, _ := log.Open(leaderDir)
+
+	if leaderLog.LastIndex() != 3 {
+		t.Fatalf("leader lastIndex=%d, expected 3", leaderLog.LastIndex())
+	}
+	if leaderLog.CommitIndex() != 3 {
+		t.Fatalf("leader commitIndex=%d, expected 3", leaderLog.CommitIndex())
+	}
+
+	// --- verify follower 1 ---
+	f1Log, _ := log.Open(f1Dir)
+
+	if f1Log.LastIndex() != 3 {
+		t.Fatalf("follower1 lastIndex=%d, expected 3", f1Log.LastIndex())
+	}
+
+	e1, err := f1Log.Read(3)
+	if err != nil {
+		t.Fatalf("follower1 missing entry 3: %v", err)
+	}
+	if !bytes.Equal(e1.Payload, payload) {
+		t.Fatalf("follower1 payload mismatch: %q", e1.Payload)
+	}
+
+	// --- verify follower 2 ---
+	f2Log, _ := log.Open(f2Dir)
+
+	if f2Log.LastIndex() != 3 {
+		t.Fatalf("follower2 lastIndex=%d, expected 3", f2Log.LastIndex())
+	}
+
+	e2, err := f2Log.Read(3)
+	if err != nil {
+		t.Fatalf("follower2 missing entry 3: %v", err)
+	}
+	if !bytes.Equal(e2.Payload, payload) {
+		t.Fatalf("follower2 payload mismatch: %q", e2.Payload)
 	}
 }
 
