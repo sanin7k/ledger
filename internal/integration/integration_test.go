@@ -102,45 +102,110 @@ func TestEndToEndHappyPath(t *testing.T) {
 			t.Fatalf("expected OK, got %q for entry %d", resp, i)
 		}
 	}
+}
 
-	// --- verify leader state ---
-	leaderLog, _ := log.Open(leaderDir)
+func TestMultiEntryPrefixReplication(t *testing.T) {
+	baseDir := t.TempDir()
 
-	if leaderLog.LastIndex() != 3 {
-		t.Fatalf("leader lastIndex=%d, expected 3", leaderLog.LastIndex())
+	// --- follower dirs ---
+	f1Dir := filepath.Join(baseDir, "f1")
+	f2Dir := filepath.Join(baseDir, "f2")
+	os.MkdirAll(f1Dir, 0755)
+	os.MkdirAll(f2Dir, 0755)
+
+	startFollower(t, 1, "127.0.0.1:9601", f1Dir)
+	startFollower(t, 2, "127.0.0.1:9602", f2Dir)
+
+	// --- leader ---
+	leaderDir := filepath.Join(baseDir, "leader")
+	os.MkdirAll(leaderDir, 0755)
+
+	leaderLog, err := log.Open(leaderDir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if leaderLog.CommitIndex() != 3 {
-		t.Fatalf("leader commitIndex=%d, expected 3", leaderLog.CommitIndex())
+
+	ldr := leader.NewLeader(
+		1,
+		leaderLog,
+		[]string{
+			"127.0.0.1:9601",
+			"127.0.0.1:9602",
+		},
+	)
+
+	go leader.Serve("127.0.0.1:9600", ldr)
+	time.Sleep(50 * time.Millisecond)
+
+	// --- client appends ---
+	payloads := [][]byte{
+		[]byte("A"),
+		[]byte("B"),
+		[]byte("C"),
+	}
+
+	for i, p := range payloads {
+		resp := sendClientAppend(t, "127.0.0.1:9600", p)
+		if string(resp) != "OK" {
+			t.Fatalf("append %d failed: %q", i+1, resp)
+		}
+	}
+
+	// --- verify leader log ---
+	lg, _ := log.Open(leaderDir)
+
+	if lg.LastIndex() != uint64(len(payloads)) {
+		t.Fatalf("leader lastIndex=%d, expected %d",
+			lg.LastIndex(), len(payloads))
+	}
+
+	for i, expected := range payloads {
+		e, err := lg.Read(uint64(i + 1))
+		if err != nil {
+			t.Fatalf("leader missing entry %d: %v", i+1, err)
+		}
+		if !bytes.Equal(e.Payload, expected) {
+			t.Fatalf("leader entry %d payload mismatch: %q",
+				i+1, e.Payload)
+		}
 	}
 
 	// --- verify follower 1 ---
 	f1Log, _ := log.Open(f1Dir)
 
-	if f1Log.LastIndex() != 3 {
-		t.Fatalf("follower1 lastIndex=%d, expected 3", f1Log.LastIndex())
+	if f1Log.LastIndex() != uint64(len(payloads)) {
+		t.Fatalf("follower1 lastIndex=%d, expected %d",
+			f1Log.LastIndex(), len(payloads))
 	}
 
-	e1, err := f1Log.Read(3)
-	if err != nil {
-		t.Fatalf("follower1 missing entry 3: %v", err)
-	}
-	if !bytes.Equal(e1.Payload, payload) {
-		t.Fatalf("follower1 payload mismatch: %q", e1.Payload)
+	for i, expected := range payloads {
+		e, err := f1Log.Read(uint64(i + 1))
+		if err != nil {
+			t.Fatalf("follower1 missing entry %d: %v", i+1, err)
+		}
+		if !bytes.Equal(e.Payload, expected) {
+			t.Fatalf("follower1 entry %d payload mismatch: %q",
+				i+1, e.Payload)
+		}
 	}
 
 	// --- verify follower 2 ---
 	f2Log, _ := log.Open(f2Dir)
 
-	if f2Log.LastIndex() != 3 {
-		t.Fatalf("follower2 lastIndex=%d, expected 3", f2Log.LastIndex())
+	if f2Log.LastIndex() != uint64(len(payloads)) {
+		t.Fatalf("follower2 lastIndex=%d, expected %d",
+			f2Log.LastIndex(), len(payloads))
 	}
 
-	e2, err := f2Log.Read(3)
-	if err != nil {
-		t.Fatalf("follower2 missing entry 3: %v", err)
-	}
-	if !bytes.Equal(e2.Payload, payload) {
-		t.Fatalf("follower2 payload mismatch: %q", e2.Payload)
+	for i, expected := range payloads {
+		e, err := f2Log.Read(uint64(i + 1))
+		if err != nil {
+			t.Fatalf("follower2 missing entry %d: %v", i+1, err)
+		}
+		if !bytes.Equal(e.Payload, expected) {
+			t.Fatalf("follower2 entry %d payload mismatch: %q",
+				i+1, e.Payload)
+		}
 	}
 }
 
@@ -171,15 +236,17 @@ func TestAppendWithOneFollowerDown(t *testing.T) {
 	go leader.Serve("127.0.0.1:9300", ldr)
 	time.Sleep(50 * time.Millisecond)
 
-	resp := sendClientAppend(t, "127.0.0.1:9300", []byte("majority"))
+	for i := 1; i <= 3; i++ {
+		resp := sendClientAppend(t, "127.0.0.1:9300", []byte("majority"))
 
-	if string(resp) != "OK" {
-		t.Fatalf("expected OK, got %q", resp)
+		if string(resp) != "OK" {
+			t.Fatalf("expected OK, got %q", resp)
+		}
 	}
 
 	lg2, _ := log.Open(leaderDir)
-	if lg2.CommitIndex() != 1 {
-		t.Fatalf("expected commitIndex=1, got %d", lg2.CommitIndex())
+	if lg2.CommitIndex() != 3 {
+		t.Fatalf("expected commitIndex=3, got %d", lg2.CommitIndex())
 	}
 }
 
@@ -202,10 +269,12 @@ func TestAppendWithoutQuorumFails(t *testing.T) {
 	go leader.Serve("127.0.0.1:9400", ldr)
 	time.Sleep(50 * time.Millisecond)
 
-	resp := sendClientAppend(t, "127.0.0.1:9400", []byte("fail"))
+	for i := 1; i <= 3; i++ {
+		resp := sendClientAppend(t, "127.0.0.1:9400", []byte("fail"))
 
-	if string(resp) == "OK" {
-		t.Fatalf("expected failure without quorum")
+		if string(resp) == "OK" {
+			t.Fatalf("expected failure without quorum")
+		}
 	}
 
 	lg2, _ := log.Open(leaderDir)
