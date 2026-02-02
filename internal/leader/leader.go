@@ -33,7 +33,7 @@ func NewLeader(id uint32, log *log.Log, followers []string) *Leader {
 func sendAppend(addr string, req protocol.AppendRequest) (bool, uint64, bool) {
 	conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 	if err != nil {
-		return false, 0, false
+		return false, 0, false // unreachable
 	}
 	defer conn.Close()
 
@@ -41,29 +41,29 @@ func sendAppend(addr string, req protocol.AppendRequest) (bool, uint64, bool) {
 
 	payload, err := protocol.EncodeAppendRequest(req)
 	if err != nil {
-		return false, 0, false
+		return false, 0, true // reachable but local error
 	}
 
-	err = transport.WriteFrame(conn, transport.Frame{
+	if err := transport.WriteFrame(conn, transport.Frame{
 		Type:    protocol.MsgAppendRequest,
 		Payload: payload,
-	})
-	if err != nil {
-		return false, 0, false
+	}); err != nil {
+		return false, 0, false // network failure
 	}
 
 	frame, err := transport.ReadFrame(conn)
 	if err != nil {
-		return false, 0, false
+		return false, 0, false // network failure
 	}
 
 	if frame.Type != protocol.MsgAppendResponse {
-		return false, 0, false
+		// reachable but protocol violation
+		return false, 0, true
 	}
 
 	resp, err := protocol.DecodeAppendResponse(frame.Payload)
 	if err != nil {
-		return false, 0, false
+		return false, 0, true
 	}
 
 	return resp.Success, resp.LastIndex, true

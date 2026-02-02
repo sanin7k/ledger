@@ -1,20 +1,20 @@
-
 # ledger v1 — Safety & Correctness Invariants
 
 This document defines the safety and correctness invariants for `ledger` v1.
-All implementation behavior is expected to comply with these invariants.
+All implementation behavior **must** comply with these invariants.
+If code behavior contradicts this document, the code is incorrect.
 
 ---
 
 ## 1. System Model
 
 - Fixed-size cluster of N nodes (3–5)
-- Single leader (assumed; no election in v1)
+- Single leader (assumed; no leader election in v1)
 - Clients send append requests only to the leader
 - Followers are passive replicas
 - Communication via raw TCP
-- Nodes may crash and restart with disk intact
-- Network may drop, delay, or reorder messages
+- Nodes may crash and restart with persistent storage intact
+- Network may drop, delay, duplicate, or reorder messages
 
 ---
 
@@ -22,10 +22,12 @@ All implementation behavior is expected to comply with these invariants.
 
 ### Tolerated
 
-- Crash of any single node
-- Crash at any instruction boundary
-- Restart with persistent storage intact
+- Crash-stop failure of any single node
+- Crashes at any instruction boundary
+- Restart with durable on-disk state intact
+- Partial writes and torn log entries
 - Message loss, duplication, and reordering
+- Unreachable or slow followers
 
 ### Not Tolerated
 
@@ -44,11 +46,15 @@ All implementation behavior is expected to comply with these invariants.
 - Entries are written only by appending
 - Entries with index ≤ `commit_index` are immutable
 
+---
+
 ### Invariant L2 — Durability Marker
 
-- An entry is considered durable iff it has a completion marker
+- An entry is considered durable **iff** a completion marker is present
 - Entries without a completion marker are invalid
-- On restart, all invalid trailing entries must be truncated
+- On restart, all invalid trailing entries **must** be truncated
+
+---
 
 ### Invariant L3 — Prefix Property
 
@@ -61,9 +67,11 @@ All implementation behavior is expected to comply with these invariants.
 
 ### Invariant C1 — Commit Index Authority
 
-- `commit_index` is the only authoritative indicator of commitment
+- `commit_index` is the sole authoritative indicator of commitment
 - `commit_index` is stored durably on disk
-- Commitment is never inferred from runtime communication after a crash
+- Commitment is never inferred from volatile state or network communication after a crash
+
+---
 
 ### Invariant C2 — Committed Entries Are Immutable
 
@@ -72,6 +80,8 @@ Any entry with index ≤ `commit_index`:
 - must never be removed
 - must never be overwritten
 - must never be reordered
+
+---
 
 ### Invariant C3 — Uncommitted Entries Are Speculative
 
@@ -87,13 +97,15 @@ Entries with index > `commit_index`:
 
 ### Invariant S1 — No Lies to the Client
 
-A client may receive success only if the appended entry:
+A client may receive a success response **only if** the appended entry:
 
 - is durably written on the leader
 - is durably written on a majority of nodes
 - has been reflected in a durable `commit_index`
 
-### Invariant S2 — Success Implies Durability
+---
+
+### Invariant S2 — Success Implies Permanence
 
 If a client receives success for entry *i*, then:
 
@@ -107,25 +119,29 @@ If a client receives success for entry *i*, then:
 ### Invariant LDR1 — Single Source of Truth
 
 - The leader’s log defines the authoritative history
-- Followers never invent or finalize history
+- Followers never invent, reorder, or finalize history
+
+---
 
 ### Invariant LDR2 — Commitment Is a Durable Act
 
-The leader advances `commit_index` only after:
+The leader advances `commit_index` **only after**:
 
-- durable replication to a majority
+- the entry is durably replicated to a majority of nodes
 
-The leader never advances `commit_index` during crash recovery.
+The leader must never advance `commit_index` during crash recovery.
+
+---
 
 ### Invariant LDR3 — Recovery Does Not Decide Commitment
 
 After a crash, the leader:
 
 - repairs its log
-- reads `commit_index`
-- treats all entries > `commit_index` as uncommitted
+- reads `commit_index` from durable storage
+- treats all entries with index > `commit_index` as uncommitted
 
-Commitment decisions occur only during normal operation.
+Commitment decisions occur **only** during normal operation.
 
 ---
 
@@ -136,15 +152,19 @@ Commitment decisions occur only during normal operation.
 - A follower must reject or truncate any entry that violates the prefix property
 - A follower must never accept entries out of order
 
+---
+
 ### Invariant FLW2 — No Independent Commitment
 
 - A follower never decides that an entry is committed
 - A follower persists `commit_index` values only as instructed by the leader
 
+---
+
 ### Invariant FLW3 — Safe Truncation
 
-- A follower may truncate entries > `commit_index`
-- A follower must never truncate entries ≤ `commit_index`
+- A follower may truncate entries with index > `commit_index`
+- A follower must never truncate entries with index ≤ `commit_index`
 
 ---
 
@@ -152,12 +172,14 @@ Commitment decisions occur only during normal operation.
 
 ### Invariant R1 — Deterministic Recovery
 
-- After restart, recovery decisions depend only on durable state
+- After restart, recovery decisions depend only on durable on-disk state
 - No recovery logic relies on network communication to infer commitment
+
+---
 
 ### Invariant R2 — Log Repair First
 
-On restart, nodes must:
+On restart, a node must:
 
 - scan from the end of the log
 - truncate incomplete entries
@@ -172,6 +194,7 @@ Only after repair may replication resume.
 - The system may block if a majority is unavailable
 - Availability is sacrificed in favor of safety
 - No guarantees are made for reads during leader downtime
+- Followers may remain stale until explicitly repaired by the leader
 
 ---
 
@@ -185,3 +208,4 @@ Only after repair may replication resume.
 ---
 
 End of invariants.
+
